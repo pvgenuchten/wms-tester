@@ -8,4 +8,4 @@ Or run locally by cloning `index.html`, run `npx httpserver` in the folder and p
 
 Mind that your WMS service should have [CORS](https://www.geeksforgeeks.org/javascript/how-to-handle-cors-in-javascript/) enabled.
 
-
+Notice that you can also send an initial url to the tester with the url parameter, eg <https://pvgenuchten.github.io/wms-tester/?url=https://maps.isric.org/mapserv/bdod>

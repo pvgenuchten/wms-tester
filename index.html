@@ -34,18 +34,18 @@
 <body>
   <header>
     <h1>Minimal WMS tester</h1>
-    <p>Read a WMS GetCapabilities document, choose a layer, and inspect it on a Leaflet map.</p>
+    <p>Initialise a WMS (GetCapabilies), choose a layer, and inspect it on a map.</p>
   </header>
   <main>
     <section class="controls" aria-label="WMS controls">
       <div class="url-field">
         <label for="wmsUrl">WMS service URL</label>
         <input id="wmsUrl" type="url" spellcheck="false"
-          placeholder="https://example.com/geoserver/wms">
+          placeholder="https://example.com/ows">
       </div>
       <button id="loadBtn" type="button">Load capabilities</button>
       <div>
-        <label for="layerSelect">Available layer</label>
+        <label for="layerSelect">Available layers</label>
         <select id="layerSelect" disabled><option value="">Load capabilities first</option></select>
       </div>
       <button id="showBtn" type="button" disabled>Show layer</button>
@@ -53,7 +53,6 @@
     <div id="status" class="status" role="status" aria-live="polite">Enter a WMS endpoint and load its capabilities.</div>
     <div id="layerDetails" class="details"></div>
     <div id="map" aria-label="Map"></div>
-    <p class="hint">Tip: paste the base WMS endpoint, not a pre-built GetMap URL. The service must allow browser access to GetCapabilities (CORS). Map tiles are requested directly from the WMS server.</p>
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -124,8 +123,11 @@
     }
 
     $('loadBtn').addEventListener('click', async () => {
-      const raw = $('wmsUrl').value.trim();
+      var raw = $('wmsUrl').value.trim();
       if (!raw) return setStatus('Enter a WMS service URL.', true);
+      if (!raw.startsWith('http')){
+        raw = 'https://'+raw;
+      }
       let parsed;
       try { parsed = new URL(raw); } catch { return setStatus('Enter a valid URL, including https:// or http://.', true); }
       if (!['http:', 'https:'].includes(parsed.protocol)) return setStatus('Only HTTP and HTTPS WMS URLs are supported.', true);
@@ -193,6 +195,13 @@
       });
       activeWmsLayer.addTo(map);
     });
+    document.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const targetUrl = urlParams.get('url');
+      if (targetUrl) {
+        document.getElementById('wmsUrl').value = targetUrl;
+      } 
+    })
   </script>
 </body>
 </html>

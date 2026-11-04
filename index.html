@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Minimal WMS tester</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <style>
+    :root { color-scheme: light; font: 15px/1.45 system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #18212b; background: #f5f7fa; }
+    header { padding: 18px 22px 12px; background: #fff; border-bottom: 1px solid #dce2e8; }
+    h1 { margin: 0 0 4px; font-size: 1.25rem; }
+    header p { margin: 0; color: #5b6672; font-size: .9rem; }
+    main { padding: 16px; max-width: 1500px; margin: auto; }
+    .controls { display: grid; grid-template-columns: minmax(240px, 1fr) auto minmax(180px, .7fr) auto; gap: 10px; align-items: end; }
+    label { display: block; margin-bottom: 5px; font-size: .82rem; font-weight: 650; }
+    input, select, button { width: 100%; min-height: 40px; border: 1px solid #c7d0d9; border-radius: 6px; padding: 8px 10px; background: white; color: inherit; font: inherit; }
+    button { width: auto; padding-inline: 16px; cursor: pointer; background: #155eef; border-color: #155eef; color: white; font-weight: 650; }
+    button:disabled { opacity: .55; cursor: wait; }
+    .status { margin: 12px 0; min-height: 24px; color: #46515d; font-size: .9rem; }
+    .status.error { color: #b42318; }
+    .details { margin: 8px 0 12px; color: #5b6672; font-size: .85rem; overflow-wrap: anywhere; }
+    #map { height: min(68vh, 760px); min-height: 360px; border: 1px solid #dce2e8; border-radius: 8px; background: #e8edf2; }
+    .hint { margin: 10px 0 0; color: #66717d; font-size: .82rem; }
+    @media (max-width: 760px) {
+      .controls { grid-template-columns: 1fr 1fr; }
+      .url-field { grid-column: 1 / -1; }
+      #map { height: 62vh; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Minimal WMS tester</h1>
+    <p>Read a WMS GetCapabilities document, choose a layer, and inspect it on a Leaflet map.</p>
+  </header>
+  <main>
+    <section class="controls" aria-label="WMS controls">
+      <div class="url-field">
+        <label for="wmsUrl">WMS service URL</label>
+        <input id="wmsUrl" type="url" spellcheck="false"
+          placeholder="https://example.com/geoserver/wms">
+      </div>
+      <button id="loadBtn" type="button">Load capabilities</button>
+      <div>
+        <label for="layerSelect">Available layer</label>
+        <select id="layerSelect" disabled><option value="">Load capabilities first</option></select>
+      </div>
+      <button id="showBtn" type="button" disabled>Show layer</button>
+    </section>
+    <div id="status" class="status" role="status" aria-live="polite">Enter a WMS endpoint and load its capabilities.</div>
+    <div id="layerDetails" class="details"></div>
+    <div id="map" aria-label="Map"></div>
+    <p class="hint">Tip: paste the base WMS endpoint, not a pre-built GetMap URL. The service must allow browser access to GetCapabilities (CORS). Map tiles are requested directly from the WMS server.</p>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const map = L.map('map').setView([20, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+
+    let capabilitiesLayers = [];
+    let activeWmsLayer = null;
+    let serviceUrl = '';
+
+    function setStatus(message, isError = false) {
+      $('status').textContent = message;
+      $('status').className = 'status' + (isError ? ' error' : '');
+    }
+
+    function endpointWithParams(base, params) {
+      const url = new URL(base, window.location.href);
+      for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+      return url.toString();
+    }
+
+    function directChild(parent, localName) {
+      return Array.from(parent.children).find(el => el.localName === localName) || null;
+    }
+
+    function childText(parent, localName) {
+      return directChild(parent, localName)?.textContent?.trim() || '';
+    }
+
+    function parseCapabilities(xmlText) {
+      const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+      if (doc.querySelector('parsererror')) throw new Error('The server did not return valid XML capabilities.');
+      const root = doc.documentElement;
+      if (root.localName === 'ServiceExceptionReport' || root.localName === 'ExceptionReport') {
+        throw new Error(doc.documentElement.textContent.trim() || 'WMS returned an exception.');
+      }
+      const capability = Array.from(doc.getElementsByTagNameNS('*', 'Capability'))[0];
+      const rootLayer = capability && directChild(capability, 'Layer');
+      if (!rootLayer) throw new Error('No WMS Capability/Layer element was found. Check that this is a WMS endpoint.');
+
+      const results = [];
+      function walk(layer, inherited = {}) {
+        const ownName = childText(layer, 'Name');
+        const ownTitle = childText(layer, 'Title');
+        const ownCrs = directChild(layer, 'CRS')?.textContent?.trim()
+          || directChild(layer, 'SRS')?.textContent?.trim()
+          || inherited.crs || '';
+        const ownStyles = Array.from(layer.children).filter(el => el.localName === 'Style');
+        const ownStyle = ownStyles.length ? childText(ownStyles[0], 'Name') : (inherited.style || '');
+        const info = {
+          name: ownName,
+          title: ownTitle || ownName,
+          crs: ownCrs,
+          style: ownStyle,
+          queryable: layer.getAttribute('queryable') || inherited.queryable || '0'
+        };
+        if (ownName) results.push(info);
+        for (const child of Array.from(layer.children).filter(el => el.localName === 'Layer')) walk(child, info);
+      }
+      walk(rootLayer);
+      if (!results.length) throw new Error('Capabilities were read, but no named layers were advertised.');
+      return results;
+    }
+
+    $('loadBtn').addEventListener('click', async () => {
+      const raw = $('wmsUrl').value.trim();
+      if (!raw) return setStatus('Enter a WMS service URL.', true);
+      let parsed;
+      try { parsed = new URL(raw); } catch { return setStatus('Enter a valid URL, including https:// or http://.', true); }
+      if (!['http:', 'https:'].includes(parsed.protocol)) return setStatus('Only HTTP and HTTPS WMS URLs are supported.', true);
+
+      $('loadBtn').disabled = true;
+      $('layerSelect').disabled = true;
+      $('showBtn').disabled = true;
+      setStatus('Requesting GetCapabilities…');
+      $('layerDetails').textContent = '';
+      try {
+        const requestUrl = endpointWithParams(raw, { SERVICE: 'WMS', REQUEST: 'GetCapabilities' });
+        const response = await fetch(requestUrl, { headers: { 'Accept': 'application/xml,text/xml,*/*' } });
+        if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        const xml = await response.text();
+        capabilitiesLayers = parseCapabilities(xml);
+        serviceUrl = raw;
+        $('layerSelect').replaceChildren();
+        for (const layer of capabilitiesLayers) {
+          const option = document.createElement('option');
+          option.value = layer.name;
+          option.textContent = `${layer.title} (${layer.name})`;
+          $('layerSelect').append(option);
+        }
+        $('layerSelect').disabled = false;
+        $('showBtn').disabled = false;
+        setStatus(`Loaded ${capabilitiesLayers.length} named layer${capabilitiesLayers.length === 1 ? '' : 's'}. Select one and choose “Show layer”.`);
+        $('layerSelect').dispatchEvent(new Event('change'));
+      } catch (error) {
+        const corsNote = error instanceof TypeError
+          ? ' This may be a CORS restriction: the WMS server must allow this page’s origin.'
+          : '';
+        setStatus(`Could not load capabilities: ${error.message}.${corsNote}`, true);
+      } finally {
+        $('loadBtn').disabled = false;
+      }
+    });
+
+    $('layerSelect').addEventListener('change', () => {
+      const layer = capabilitiesLayers.find(item => item.name === $('layerSelect').value);
+      $('layerDetails').textContent = layer
+        ? `Title: ${layer.title} · Name: ${layer.name} · Advertised CRS/SRS: ${layer.crs || 'not specified'} · Queryable: ${layer.queryable === '1' ? 'yes' : 'no'}`
+        : '';
+    });
+
+    $('showBtn').addEventListener('click', () => {
+      const layer = capabilitiesLayers.find(item => item.name === $('layerSelect').value);
+      if (!layer || !serviceUrl) return;
+      if (activeWmsLayer) map.removeLayer(activeWmsLayer);
+      activeWmsLayer = L.tileLayer.wms(serviceUrl, {
+        layers: layer.name,
+        styles: layer.style || '',
+        format: 'image/png',
+        transparent: true,
+        version: '1.3.0',
+        // Leaflet requests in EPSG:3857 by default; most modern WMS services support it.
+        // Change this to a CRS advertised by the selected layer if necessary.
+        crs: L.CRS.EPSG3857,
+        attribution: `WMS: ${layer.title}`
+      });
+      activeWmsLayer.on('loading', () => setStatus(`Requesting map tiles for “${layer.name}”…`));
+      activeWmsLayer.on('load', () => setStatus(`Tile requests completed for “${layer.name}”. Inspect the map for rendered data.`));
+      activeWmsLayer.on('tileerror', (event) => {
+        setStatus(`A map tile failed to load for “${layer.name}”. Check the browser console/network panel; the service may reject GetMap, the CRS, format, or origin.`, true);
+        console.warn('WMS tile error', event);
+      });
+      activeWmsLayer.addTo(map);
+    });
+  </script>
+</body>
+</html>
